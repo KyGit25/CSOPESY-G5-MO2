@@ -166,10 +166,9 @@ std::thread manager_thread;
 // Random Number Generator (for process generation)
 std::mt19937 rng;
 
-// ==========================================
-// MEMORY MANAGER (STEP 2 ADDITION)
-// ==========================================
-
+/**
+ * @brief Memory Manager implementing Demand Paging with LRU.
+ */
 class MemoryManager {
 private:
     std::vector<Frame> ram;
@@ -412,7 +411,6 @@ std::shared_ptr<Process> generate_dummy_process() {
     auto process = std::make_shared<Process>(current_id, process_name, num_instructions, mem_req);
 
     // 3. Generate Random Instructions
-    // Increased range to 7 to include READ/WRITE
     std::uniform_int_distribution<int> dist_op(0, 7); 
     std::uniform_int_distribution<int> dist_val(1, 100);
     std::uniform_int_distribution<int> dist_var(0, 2); 
@@ -478,12 +476,10 @@ std::shared_ptr<Process> generate_dummy_process() {
                 }
                 break;
             
-            // --- NEW INSTRUCTIONS ---
             case 7: // READ (READ $var addr)
             case 8: // WRITE (WRITE addr value)
                 {
                     // Generate random address within process memory limit
-                    // Align to 2 bytes (word alignment) just to be safe/realistic
                     size_t max_addr = mem_req - 2; 
                     if (max_addr <= 0) max_addr = 0;
                     
@@ -606,8 +602,7 @@ void execute_instruction(
                 // Arg0: ticks
                 int64_t sleep_ticks = parse_value(process, instr.args[0]);
                 process->state = ProcessState::SLEEPING;
-                // Add current_tick + sleep_ticks.
-                // We use +1 because the current tick is already in progress.
+                // Add current_tick + sleep_ticks. + 1 to avoid immediate wake-up
                 process->wake_up_tick = cpu_ticks.load() + sleep_ticks + 1;
                 process_slept = true;
                 break;
@@ -727,15 +722,6 @@ void cpu_worker_function(int core_id) {
             process = ready_queue.front();
 
             if (process->memory_required > global_config.max_overall_mem) {
-                // Determine behavior: 
-                // The prompt implies NO execution happens. 
-                // So we leave it in the queue (or move to a waiting list) 
-                // and yield the CPU to simulate 0% utilization.
-                
-                // For this specific test case, if we pop it, we must put it back 
-                // or discard it, but we MUST NOT increment core_busy_status.
-                
-                // Let's just yield and continue. The core remains IDLE.
                 lock.unlock(); 
                 std::this_thread::yield();
                 std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -797,18 +783,10 @@ void cpu_worker_function(int core_id) {
                 } catch(...) {}
             }
 
-            // If this instruction touches memory, check the Memory Manager
             if (page_to_access != -1) {
-                // This simulates the Demand Paging delay
-                // If it returns false (conceptually), it handled a fault.
-                // Since our accessMemory implementation handles the swap synchronously, 
-                // we just call it to ensure stats (paged in/out) are updated.
                 mem_manager.accessMemory(process->id, page_to_access, is_write);
                 
-                // OPTIONAL: Add a small sleep to simulate disk I/O if a Page Fault occurred
-                // For now, we rely on the busy-wait loop below.
             }
-            // -------------------------------
 
             bool jumped = false;
             execute_instruction(process, instr, jumped, process_slept);
@@ -1145,10 +1123,7 @@ void cmd_vmstat() {
     std::cout << std::left << std::setw(15) << total << std::setw(15) << used << std::setw(15) << free_mem << "\n";
     std::cout << "\n";
     std::cout << std::left << std::setw(15) << "Idle Ticks" << std::setw(15) << "Active Ticks" << std::setw(15) << "Total Ticks" << "\n";
-    // Calculate stats roughly based on ticks
     uint64_t total_ticks = cpu_ticks.load();
-    // In this simple sim, active is roughly total - idle. 
-    // We don't track global idle perfectly, so we'll approximate for display:
     std::cout << std::left << std::setw(15) << "N/A" << std::setw(15) << total_ticks << std::setw(15) << total_ticks << "\n";
     std::cout << "\n";
     std::cout << std::left << std::setw(15) << "Pages In" << std::setw(15) << "Pages Out" << "\n";
@@ -1355,12 +1330,7 @@ int main() {
                 else std::cout << "Process not found.\n";
             }
             else if (tokens.size() > 2 && tokens[1] == "-s") {
-                // screen -s <name> (Optional: <mem>)
                 std::string name = tokens[2];
-                // Default mem if not provided or parse
-                // NOTE: generate_dummy_process calculates its own mem, 
-                // but if user provides it in -s, we might want to override.
-                // For now, keep simple:
                 auto p = generate_dummy_process(); 
                 p->name = name; // Override name
                 
